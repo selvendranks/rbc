@@ -1,0 +1,18 @@
+extends Node3D
+
+@onready var cam_front = $SubViewportContainer1/SubViewport1/Camera1
+@onready var cam_back  = $SubViewportContainer2/SubViewport2/Camera2
+
+var front_offset : Transform3D
+var back_offset  : Transform3D
+
+func _ready() -> void:
+	front_offset = cam_front.transform
+	front_offset.origin.x = 0 
+	back_offset  = cam_back.transform
+	back_offset.origin.x = 0
+	
+
+func _process(_delta):
+	cam_front.global_transform = global_transform * front_offset
+	cam_back.global_transform = global_transform * back_offset
