@@ -1,5 +1,11 @@
 extends VehicleBody3D
 
+@onready var cam_front = $SubViewportContainer1/SubViewport1/Camera1
+@onready var cam_back  = $SubViewportContainer2/SubViewport2/Camera2
+
+var front_offset : Transform3D
+var back_offset  : Transform3D
+
 # --- Movement tuning ---
 @export var max_engine_force: float = 10.0    # per-wheel drive force
 @export var max_brake_force: float = 60.0
@@ -35,6 +41,12 @@ var _current_steer_limit: float = 0.5
 var _crab_angle_target: float = 0.0
 
 func _ready() -> void:
+	front_offset = cam_front.transform
+	front_offset.origin.x = 0 
+	back_offset  = cam_back.transform
+	back_offset.origin.x = 0
+
+
 	_all_wheels = _resolve_wheels(all_wheels)
 	_steer_wheels_normal = _resolve_wheels(steering_wheels)
 	_drive_wheels = _resolve_wheels(drive_wheels)
@@ -100,6 +112,11 @@ func _physics_process(delta: float) -> void:
 	# --- HUD speed ---
 	if _hud_label:
 		_hud_label.text = str(round(linear_velocity.length() * 3.6)) + " km/h"
+	
+	cam_front.global_transform = global_transform * front_offset
+	cam_back.global_transform = global_transform * back_offset
+
+
 
 func _apply_mode() -> void:
 	# Reset steering flags & angles for wheels not steering
