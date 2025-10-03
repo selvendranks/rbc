@@ -1,0 +1,168 @@
+@tool
+extends Node3D
+
+@export var container_scene: PackedScene
+@export var multimesh_mesh: Mesh
+
+@export var containers_x: int = 3
+@export var containers_z: int = 3
+@export var containers_y_min: int = 2
+@export var containers_y_max: int = 4
+
+@export var min_bounds: Vector3 = Vector3(-10, 0, -10)
+@export var max_bounds: Vector3 = Vector3(10, 0, 10)
+
+@export var container_height: float = 2.0
+@export var y_spacing: float = 0.0
+
+@export var reference_path: NodePath
+@export var distance_threshold: float = 20.0
+
+@export var random_seed: int = 12345
+@export var regenerate_now: bool = false
+
+var rng := RandomNumberGenerator.new()
+
+var scene_root: Node3D
+var multimesh_instance: MultiMeshInstance3D
+
+# UUID -> state
+var container_states: Dictionary = {}   # uuid -> { "transform": Transform3D, "is_scene": bool }
+
+
+func _enter_tree():
+	_ensure_holders()
+	if container_states.is_empty():
+		_spawn_initial_grid()
+	set_process(true)
+
+
+func _process(_delta: float) -> void:
+	if regenerate_now:
+		regenerate_now = false
+		_clear_scene_root()
+		container_states.clear()
+		_spawn_initial_grid()
+	_update_containers()
+
+
+func _ensure_holders():
+	if scene_root == null:
+		scene_root = Node3D.new()
+		scene_root.name = "SceneContainers"
+		add_child(scene_root)
+
+	if multimesh_instance == null:
+		multimesh_instance = MultiMeshInstance3D.new()
+		multimesh_instance.name = "FarMultiMesh"
+		add_child(multimesh_instance)
+		multimesh_instance.multimesh = MultiMesh.new()
+		multimesh_instance.multimesh.transform_format = MultiMesh.TRANSFORM_3D
+
+
+func _get_reference() -> Node3D:
+	if reference_path.is_empty():
+		return null
+	return get_node_or_null(reference_path) as Node3D
+
+
+func _spawn_initial_grid():
+	rng.seed = random_seed
+
+	var size := max_bounds - min_bounds
+	var step_x := (size.x / float(containers_x - 1)) if containers_x > 1 else 0.0
+	var step_z := (size.z / float(containers_z - 1)) if containers_z > 1 else 0.0
+	var step_y := container_height + y_spacing
+
+	for x in range(containers_x):
+		for z in range(containers_z):
+			var y_count := rng.randi_range(containers_y_min, containers_y_max)
+			for y in range(y_count):
+				var uuid := new_uuid()
+				var pos = Vector3(
+					min_bounds.x + x * step_x,
+					min_bounds.y + y * step_y,
+					min_bounds.z + z * step_z
+				)
+				container_states[uuid] = {
+					"transform": Transform3D(Basis(), pos),
+					"is_scene": false
+				}
+
+
+func _update_containers():
+	var ref := _get_reference()
+	var ref_pos := Vector3.ZERO
+	if ref:
+		ref_pos = ref.global_transform.origin
+
+	var far_transforms: Array[Transform3D] = []
+
+	for uuid in container_states.keys():
+		var state = container_states[uuid]
+		var xf: Transform3D = state["transform"]
+		var is_scene: bool = state["is_scene"]
+
+		var dist = xf.origin.distance_to(ref_pos)
+		var want_scene = dist < distance_threshold
+
+		if want_scene and not is_scene:
+			var inst := container_scene.instantiate() as Node3D
+			inst.name = "Container_%s" % uuid
+			inst.global_transform = xf
+			scene_root.add_child(inst)
+			state["is_scene"] = true
+			container_states[uuid] = state
+
+		elif not want_scene and is_scene:
+			var inst = scene_root.get_node_or_null("Container_%s" % uuid)
+			if inst:
+				state["transform"] = inst.global_transform
+				inst.queue_free()
+			state["is_scene"] = false
+			container_states[uuid] = state
+			far_transforms.append(state["transform"])
+
+		elif not want_scene:
+			far_transforms.append(xf)
+
+		elif want_scene:
+			var inst = scene_root.get_node_or_null("Container_%s" % uuid)
+			if inst:
+				state["transform"] = inst.global_transform
+				container_states[uuid] = state
+
+	_apply_far_multimesh(far_transforms)
+
+
+func _apply_far_multimesh(far_transforms: Array[Transform3D]):
+	if multimesh_mesh == null:
+		return
+
+	var mm := multimesh_instance.multimesh
+	mm.mesh = multimesh_mesh
+	mm.instance_count = far_transforms.size()
+	for i in range(far_transforms.size()):
+		mm.set_instance_transform(i, far_transforms[i])
+
+	multimesh_instance.visible = far_transforms.size() > 0
+	scene_root.visible = true
+
+
+func _clear_scene_root():
+	for child in scene_root.get_children():
+		child.queue_free()
+
+
+# Generates a UUID-like globally unique string using Crypto random bytes.
+func new_uuid() -> String:
+	var bytes: PackedByteArray = Crypto.new().generate_random_bytes(16)
+	var hex := bytes.hex_encode()  # 32 hex chars
+	# Format like 8-4-4-4-12 for readability (RFC4122 style, not strictly v4 bit-masked)
+	return "%s-%s-%s-%s-%s" % [
+		hex.substr(0, 8),
+		hex.substr(8, 4),
+		hex.substr(12, 4),
+		hex.substr(16, 4),
+		hex.substr(20, 12)
+	]
