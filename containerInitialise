@@ -2,18 +2,16 @@
 extends Node3D
 
 @export var container_scene: PackedScene
-
-# Mid and far meshes
 @export var multimesh_mesh_mid: Mesh
 @export var multimesh_mesh_far: Mesh
+
+@export var min_marker: NodePath
+@export var max_marker: NodePath
 
 @export var containers_x: int = 3
 @export var containers_z: int = 3
 @export var containers_y_min: int = 2
 @export var containers_y_max: int = 4
-
-@export var min_bounds: Vector3 = Vector3(-10, 0, -10)
-@export var max_bounds: Vector3 = Vector3(10, 0, 10)
 
 @export var container_height: float = 2.0
 @export var y_spacing: float = 0.0
@@ -26,21 +24,19 @@ extends Node3D
 @export var regenerate_now: bool = false
 
 var rng := RandomNumberGenerator.new()
-
 var scene_root: Node3D
 var multimesh_mid: MultiMeshInstance3D
 var multimesh_far: MultiMeshInstance3D
-
-# UUID -> state
+var viz_box: MeshInstance3D
 var container_states: Dictionary = {}   # uuid -> { "transform": Transform3D, "is_scene": bool }
 
-
-func _enter_tree():
+# --- Lifecycle ---
+func _ready():
 	_ensure_holders()
-	if container_states.is_empty():
-		_spawn_initial_grid()
+	_clear_scene_root()
+	container_states.clear()
+	_spawn_initial_grid()
 	set_process(true)
-
 
 func _process(_delta: float) -> void:
 	if regenerate_now:
@@ -49,8 +45,9 @@ func _process(_delta: float) -> void:
 		container_states.clear()
 		_spawn_initial_grid()
 	_update_containers()
+	_update_visual_box()
 
-
+# --- Setup ---
 func _ensure_holders():
 	if scene_root == null:
 		scene_root = Node3D.new()
@@ -71,15 +68,31 @@ func _ensure_holders():
 		multimesh_far.multimesh = MultiMesh.new()
 		multimesh_far.multimesh.transform_format = MultiMesh.TRANSFORM_3D
 
+	if viz_box == null:
+		viz_box = MeshInstance3D.new()
+		viz_box.name = "BoundsViz"
+		viz_box.mesh = BoxMesh.new()
+		add_child(viz_box)
 
+# --- Helpers ---
 func _get_reference() -> Node3D:
 	if reference_path.is_empty():
 		return null
 	return get_node_or_null(reference_path) as Node3D
 
+func _get_bounds() -> Array:
+	var min_node = get_node_or_null(min_marker) as Node3D
+	var max_node = get_node_or_null(max_marker) as Node3D
+	if min_node and max_node:
+		return [min_node.global_transform.origin, max_node.global_transform.origin]
+	return [Vector3.ZERO, Vector3.ONE]
 
+# --- Grid spawn ---
 func _spawn_initial_grid():
 	rng.seed = random_seed
+	var bounds = _get_bounds()
+	var min_bounds: Vector3 = bounds[0]
+	var max_bounds: Vector3 = bounds[1]
 
 	var size := max_bounds - min_bounds
 	var step_x := (size.x / float(containers_x - 1)) if containers_x > 1 else 0.0
@@ -101,7 +114,7 @@ func _spawn_initial_grid():
 					"is_scene": false
 				}
 
-
+# --- Update ---
 func _update_containers():
 	var ref := _get_reference()
 	var ref_pos := Vector3.ZERO
@@ -119,7 +132,6 @@ func _update_containers():
 		var dist = xf.origin.distance_to(ref_pos)
 
 		if dist < distance_threshold_mid:
-			# Scene instance
 			if not is_scene:
 				var inst := container_scene.instantiate() as Node3D
 				inst.name = "Container_%s" % uuid
@@ -134,7 +146,6 @@ func _update_containers():
 					container_states[uuid] = state
 
 		elif dist < distance_threshold_far:
-			# Mid-range multimesh
 			if is_scene:
 				var inst = scene_root.get_node_or_null("Container_%s" % uuid)
 				if inst:
@@ -145,7 +156,6 @@ func _update_containers():
 			mid_transforms.append(state["transform"])
 
 		else:
-			# Far-range multimesh
 			if is_scene:
 				var inst = scene_root.get_node_or_null("Container_%s" % uuid)
 				if inst:
@@ -155,13 +165,18 @@ func _update_containers():
 				container_states[uuid] = state
 			far_transforms.append(state["transform"])
 
-	_apply_multimesh(multimesh_mid, multimesh_mesh_mid, mid_transforms)
-	_apply_multimesh(multimesh_far, multimesh_mesh_far, far_transforms)
+	_apply_multimesh(multimesh_mid, multimesh_mesh_mid, mid_transforms, Color(0.6,0.8,1.0))
+	_apply_multimesh(multimesh_far, multimesh_mesh_far, far_transforms, Color(0.4,0.6,0.9))
 
-
-func _apply_multimesh(mmi: MultiMeshInstance3D, mesh: Mesh, transforms: Array[Transform3D]):
+func _apply_multimesh(mmi: MultiMeshInstance3D, mesh: Mesh, transforms: Array[Transform3D], fallback_color: Color):
 	if mesh == null:
-		return
+		var cube := BoxMesh.new()
+		cube.size = Vector3.ONE
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = fallback_color
+		cube.material = mat
+		mesh = cube
+
 	var mm := mmi.multimesh
 	mm.mesh = mesh
 	mm.instance_count = transforms.size()
@@ -169,13 +184,46 @@ func _apply_multimesh(mmi: MultiMeshInstance3D, mesh: Mesh, transforms: Array[Tr
 		mm.set_instance_transform(i, transforms[i])
 	mmi.visible = transforms.size() > 0
 
-
 func _clear_scene_root():
 	for child in scene_root.get_children():
 		child.queue_free()
 
+# --- Visualization ---
+func _update_visual_box():
+	if not viz_box:
+		return
 
-# Generates a UUID-like globally unique string using Crypto random bytes.
+	var bounds = _get_bounds()
+	var min_bounds: Vector3 = bounds[0]
+	var max_bounds: Vector3 = bounds[1]
+
+	var size = Vector3(max_bounds.x - min_bounds.x, 0.0, max_bounds.z - min_bounds.z)
+	var center = Vector3((min_bounds.x + max_bounds.x) * 0.5, min_bounds.y, (min_bounds.z + max_bounds.z) * 0.5)
+
+	# Define square corners in local space
+	var corners = [
+		Vector3(-0.5, 0, -0.5),
+		Vector3( 0.5, 0, -0.5),
+		Vector3( 0.5, 0,  0.5),
+		Vector3(-0.5, 0,  0.5),
+		Vector3(-0.5, 0, -0.5) # repeat first to close
+	]
+
+	# Build line mesh with SurfaceTool
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_LINE_STRIP)
+
+	for c in corners:
+		st.add_vertex(c)
+
+	var mesh := st.commit()
+
+	viz_box.mesh = mesh
+	viz_box.scale = Vector3(size.x, 1.0, size.z)
+	viz_box.global_transform.origin = center
+	viz_box.visible = Engine.is_editor_hint()
+	
+# --- UUID helper ---
 func new_uuid() -> String:
 	var bytes: PackedByteArray = Crypto.new().generate_random_bytes(16)
 	var hex := bytes.hex_encode()
