@@ -1,7 +1,7 @@
 shader_type spatial;
 render_mode blend_mix, depth_draw_never, cull_back;
 
-// --- Ripple Parameters 6277860a ---
+// --- Ripple Parameters ---
 uniform sampler2D ripple_normal;
 uniform float ripple_scale = 4.0;
 uniform float ripple_strength : hint_range(0.0, 1.0) = 0.3;
